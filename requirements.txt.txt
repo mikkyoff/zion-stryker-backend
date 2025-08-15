@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+python-multipart
+python-dotenv
+pandas
+numpy
+ta
+scipy
+websockets
+aiohttp
+tenacity
