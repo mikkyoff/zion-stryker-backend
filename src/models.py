@@ -19,7 +19,7 @@ class SignalData(BaseModel):
     asset: str
     direction: str  # "buy" or "sell"
     timeframe: str
-    urgency: str  # "hot" or "normal"
+    urgency: Optional[str] = None  # "nice", "sharp", "hot" (Flash only) or None (Super)
     confidence: float
     reasons: List[str]
     mode: str  # "flash" or "super"
@@ -36,6 +36,7 @@ class TechnicalIndicators(BaseModel):
     ema_6: Optional[float] = None
     ema_18: Optional[float] = None
     ema_proximity: Optional[float] = None
+    adx: Optional[float] = None  # Added for future use
 
 class SignalResponse(BaseModel):
     """API response for signals"""
