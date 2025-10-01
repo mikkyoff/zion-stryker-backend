@@ -4,7 +4,7 @@ Implements Flash and Super mode trading strategies
 """
 import numpy as np
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 from datetime import datetime
 
@@ -117,13 +117,92 @@ class SignalEngine:
         except:
             return 0.0
     
+    def _check_ema_about_to_cross(self, candles: List[CandleData], direction: str) -> Tuple[bool, float]:
+        """
+        Check if EMAs are about to cross (very close but haven't crossed yet)
+        
+        For BUY: EMA 6 approaching from BELOW, gap shrinking
+        For SELL: EMA 6 approaching from ABOVE, gap shrinking
+        
+        Returns: (is_about_to_cross, current_gap_percentage)
+        """
+        if len(candles) < 10:
+            return False, 0.0
+        
+        try:
+            df = pd.DataFrame([{'close': c.close} for c in candles])
+            ema_6 = df['close'].ewm(span=6, adjust=False).mean()
+            ema_18 = df['close'].ewm(span=18, adjust=False).mean()
+            
+            # Current values
+            current_6 = ema_6.iloc[-1]
+            current_18 = ema_18.iloc[-1]
+            
+            # Previous values (2 candles ago)
+            prev_6 = ema_6.iloc[-3]
+            prev_18 = ema_18.iloc[-3]
+            
+            # Calculate gaps
+            current_gap = abs(current_6 - current_18)
+            prev_gap = abs(prev_6 - prev_18)
+            gap_pct = (current_gap / current_18) * 100
+            
+            # Check if gap is shrinking (EMAs getting closer)
+            gap_shrinking = current_gap < prev_gap
+            
+            if direction == "buy":
+                # EMA 6 must be BELOW EMA 18 (hasn't crossed)
+                # AND gap must be very small (≤ 0.3%)
+                # AND gap must be shrinking
+                if current_6 < current_18 and gap_pct <= 0.3 and gap_shrinking:
+                    return True, gap_pct
+                    
+            elif direction == "sell":
+                # EMA 6 must be ABOVE EMA 18 (hasn't crossed)
+                # AND gap must be very small (≤ 0.3%)
+                # AND gap must be shrinking
+                if current_6 > current_18 and gap_pct <= 0.3 and gap_shrinking:
+                    return True, gap_pct
+            
+            return False, gap_pct
+            
+        except Exception as e:
+            logger.error(f"Error checking EMA cross: {e}")
+            return False, 0.0
+    
     def _all_candles_bullish(self, candles: List[CandleData]) -> bool:
-        """Check if ALL candles are bullish (close > open)"""
-        return len(candles) >= 3 and all(c.close > c.open for c in candles)
+        """Check if ALL last 3 candles are bullish (close > open)"""
+        if len(candles) < 3:
+            return False
+        
+        last_3 = candles[-3:]
+        
+        # DEBUG: Log each candle
+        for i, c in enumerate(last_3, 1):
+            is_bullish = c.close > c.open
+            logger.debug(f"  Candle {i}: O={c.open:.5f} C={c.close:.5f} {'✅ BULL' if is_bullish else '❌ BEAR'}")
+        
+        all_bullish = all(c.close > c.open for c in last_3)
+        logger.debug(f"  All 3 bullish? {all_bullish}")
+        
+        return all_bullish
     
     def _all_candles_bearish(self, candles: List[CandleData]) -> bool:
-        """Check if ALL candles are bearish (close < open)"""
-        return len(candles) >= 3 and all(c.close < c.open for c in candles)
+        """Check if ALL last 3 candles are bearish (close < open)"""
+        if len(candles) < 3:
+            return False
+        
+        last_3 = candles[-3:]
+        
+        # DEBUG: Log each candle
+        for i, c in enumerate(last_3, 1):
+            is_bearish = c.close < c.open
+            logger.debug(f"  Candle {i}: O={c.open:.5f} C={c.close:.5f} {'✅ BEAR' if is_bearish else '❌ BULL'}")
+        
+        all_bearish = all(c.close < c.open for c in last_3)
+        logger.debug(f"  All 3 bearish? {all_bearish}")
+        
+        return all_bearish
     
     def _get_adx_threshold(self, timeframe: str) -> float:
         """Get ADX threshold based on timeframe"""
@@ -136,23 +215,7 @@ class SignalEngine:
     
     def analyze_flash_mode(self, candles: List[CandleData], timeframe: str, asset: str) -> Optional[SignalData]:
         """
-        Flash Mode Strategy with 3-tier urgency:
-        
-        NICE (basic):
-        - 3 consecutive candles
-        - RSI > 50 / < 50
-        - Distance to BB ≥ 40%
-        - EMAs close (≤ 0.5%)
-        
-        SHARP (nice + extras):
-        - All NICE conditions
-        - STM Filter (angle ≥ 15° or ≤ -15°)
-        - ADX above threshold
-        
-        HOT (sharp + perfect):
-        - All SHARP conditions
-        - Distance to BB ≥ 50% (extra room)
-        - EMA proximity ≤ 0.3% (very tight)
+        Flash Mode Strategy with 3-tier urgency
         """
         if len(candles) < 50:
             return None
@@ -168,12 +231,26 @@ class SignalEngine:
         adx_threshold = self._get_adx_threshold(timeframe)
         
         # BUY SIGNAL
-        if (self._all_candles_bullish(candles[-3:]) and
+        logger.debug(f"\n🔍 Checking BUY for {asset} {timeframe}")
+        logger.debug(f"  Price: {current_price:.5f}")
+        logger.debug(f"  BB Upper: {indicators.bb_upper:.5f}")
+        logger.debug(f"  BB Lower: {indicators.bb_lower:.5f}")
+        
+        candles_bullish = self._all_candles_bullish(candles)
+        ema_about_to_cross_buy, ema_gap = self._check_ema_about_to_cross(candles, "buy")
+        
+        logger.debug(f"  Candles bullish: {candles_bullish}")
+        logger.debug(f"  RSI: {indicators.rsi:.1f} (need >50)")
+        logger.debug(f"  EMA about to cross: {ema_about_to_cross_buy} (gap: {ema_gap:.3f}%)")
+        
+        if (candles_bullish and
             indicators.rsi and indicators.rsi > 50 and
-            indicators.ema_proximity and indicators.ema_proximity <= 0.5):
+            ema_about_to_cross_buy):
             
             distance_to_upper = indicators.bb_upper - current_price
             distance_pct = (distance_to_upper / bb_range) * 100
+            
+            logger.debug(f"  Distance to upper BB: {distance_pct:.1f}% (need ≥40%)")
             
             # Must have at least 40% room
             if distance_pct >= 40:
@@ -182,7 +259,7 @@ class SignalEngine:
                 has_stm = stm_angle >= 15.0
                 has_adx = indicators.adx and indicators.adx > adx_threshold
                 has_extra_room = distance_pct >= 50
-                has_tight_ema = indicators.ema_proximity <= 0.3
+                has_tight_ema = ema_gap <= 0.15
                 
                 # Urgency calculation
                 if has_stm and has_adx and has_extra_room and has_tight_ema:
@@ -196,7 +273,7 @@ class SignalEngine:
                     "3 consecutive bullish candles",
                     f"RSI: {indicators.rsi:.1f}",
                     f"Distance to upper BB: {distance_pct:.0f}%",
-                    f"EMAs close (gap: {indicators.ema_proximity:.2f}%)"
+                    f"EMAs about to cross (gap: {ema_gap:.2f}%)"
                 ]
                 
                 if has_stm:
@@ -206,7 +283,7 @@ class SignalEngine:
                 
                 logger.info(f"✅ BUY ({urgency.upper()}): {asset} {timeframe} | "
                            f"RSI={indicators.rsi:.1f} | BB={distance_pct:.0f}% | "
-                           f"STM={stm_angle:.1f}° | ADX={indicators.adx}")
+                           f"EMA gap={ema_gap:.2f}% | STM={stm_angle:.1f}° | ADX={indicators.adx}")
                 
                 return SignalData(
                     asset=asset,
@@ -221,19 +298,30 @@ class SignalEngine:
                 )
         
         # SELL SIGNAL
-        if (self._all_candles_bearish(candles[-3:]) and
+        logger.debug(f"\n🔍 Checking SELL for {asset} {timeframe}")
+        
+        candles_bearish = self._all_candles_bearish(candles)
+        ema_about_to_cross_sell, ema_gap = self._check_ema_about_to_cross(candles, "sell")
+        
+        logger.debug(f"  Candles bearish: {candles_bearish}")
+        logger.debug(f"  RSI: {indicators.rsi:.1f} (need <50)")
+        logger.debug(f"  EMA about to cross: {ema_about_to_cross_sell} (gap: {ema_gap:.3f}%)")
+        
+        if (candles_bearish and
             indicators.rsi and indicators.rsi < 50 and
-            indicators.ema_proximity and indicators.ema_proximity <= 0.5):
+            ema_about_to_cross_sell):
             
             distance_to_lower = current_price - indicators.bb_lower
             distance_pct = (distance_to_lower / bb_range) * 100
+            
+            logger.debug(f"  Distance to lower BB: {distance_pct:.1f}% (need ≥40%)")
             
             if distance_pct >= 40:
                 
                 has_stm = stm_angle <= -15.0
                 has_adx = indicators.adx and indicators.adx > adx_threshold
                 has_extra_room = distance_pct >= 50
-                has_tight_ema = indicators.ema_proximity <= 0.3
+                has_tight_ema = ema_gap <= 0.15
                 
                 if has_stm and has_adx and has_extra_room and has_tight_ema:
                     urgency = "hot"
@@ -246,7 +334,7 @@ class SignalEngine:
                     "3 consecutive bearish candles",
                     f"RSI: {indicators.rsi:.1f}",
                     f"Distance to lower BB: {distance_pct:.0f}%",
-                    f"EMAs close (gap: {indicators.ema_proximity:.2f}%)"
+                    f"EMAs about to cross (gap: {ema_gap:.2f}%)"
                 ]
                 
                 if has_stm:
@@ -256,7 +344,7 @@ class SignalEngine:
                 
                 logger.info(f"✅ SELL ({urgency.upper()}): {asset} {timeframe} | "
                            f"RSI={indicators.rsi:.1f} | BB={distance_pct:.0f}% | "
-                           f"STM={stm_angle:.1f}° | ADX={indicators.adx}")
+                           f"EMA gap={ema_gap:.2f}% | STM={stm_angle:.1f}° | ADX={indicators.adx}")
                 
                 return SignalData(
                     asset=asset,
@@ -273,14 +361,7 @@ class SignalEngine:
         return None
     
     def analyze_super_mode(self, candles: List[CandleData], timeframe: str, asset: str) -> Optional[SignalData]:
-        """
-        Super Mode Strategy:
-        - All Flash conditions
-        - STM Filter REQUIRED
-        - ADX REQUIRED
-        - Stricter thresholds
-        - NO urgency displayed (urgency=None)
-        """
+        """Super Mode Strategy - same logic as Flash but stricter"""
         if len(candles) < 50:
             return None
         
@@ -295,9 +376,13 @@ class SignalEngine:
         adx_threshold = self._get_adx_threshold(timeframe)
         
         # BUY SIGNAL
-        if (self._all_candles_bullish(candles[-3:]) and
+        candles_bullish = self._all_candles_bullish(candles)
+        ema_about_to_cross_buy, ema_gap = self._check_ema_about_to_cross(candles, "buy")
+        
+        if (candles_bullish and
             indicators.rsi and indicators.rsi > 50 and
-            indicators.ema_proximity and indicators.ema_proximity <= 0.3 and
+            ema_about_to_cross_buy and
+            ema_gap <= 0.15 and  # Very tight
             stm_angle >= 15.0 and
             indicators.adx and indicators.adx > adx_threshold):
             
@@ -309,19 +394,19 @@ class SignalEngine:
                     "3 consecutive bullish candles",
                     f"RSI: {indicators.rsi:.1f}",
                     f"Distance to upper BB: {distance_pct:.0f}%",
-                    f"EMAs touching (gap: {indicators.ema_proximity:.2f}%)",
+                    f"EMAs about to cross (gap: {ema_gap:.2f}%)",
                     f"STM: EMA angle {stm_angle:.1f}°",
                     f"ADX: {indicators.adx:.1f}"
                 ]
                 
                 logger.info(f"🔥 SUPER BUY: {asset} {timeframe} | RSI={indicators.rsi:.1f} | "
-                           f"STM={stm_angle:.1f}° | ADX={indicators.adx:.1f}")
+                           f"EMA gap={ema_gap:.2f}% | STM={stm_angle:.1f}° | ADX={indicators.adx:.1f}")
                 
                 return SignalData(
                     asset=asset,
                     direction="buy",
                     timeframe=timeframe,
-                    urgency=None,  # No urgency in Super mode
+                    urgency=None,
                     confidence=min(98, 75 + (distance_pct * 0.4)),
                     reasons=reasons,
                     mode="super",
@@ -330,9 +415,13 @@ class SignalEngine:
                 )
         
         # SELL SIGNAL
-        if (self._all_candles_bearish(candles[-3:]) and
+        candles_bearish = self._all_candles_bearish(candles)
+        ema_about_to_cross_sell, ema_gap = self._check_ema_about_to_cross(candles, "sell")
+        
+        if (candles_bearish and
             indicators.rsi and indicators.rsi < 50 and
-            indicators.ema_proximity and indicators.ema_proximity <= 0.3 and
+            ema_about_to_cross_sell and
+            ema_gap <= 0.15 and
             stm_angle <= -15.0 and
             indicators.adx and indicators.adx > adx_threshold):
             
@@ -344,19 +433,19 @@ class SignalEngine:
                     "3 consecutive bearish candles",
                     f"RSI: {indicators.rsi:.1f}",
                     f"Distance to lower BB: {distance_pct:.0f}%",
-                    f"EMAs touching (gap: {indicators.ema_proximity:.2f}%)",
+                    f"EMAs about to cross (gap: {ema_gap:.2f}%)",
                     f"STM: EMA angle {stm_angle:.1f}°",
                     f"ADX: {indicators.adx:.1f}"
                 ]
                 
                 logger.info(f"🔥 SUPER SELL: {asset} {timeframe} | RSI={indicators.rsi:.1f} | "
-                           f"STM={stm_angle:.1f}° | ADX={indicators.adx:.1f}")
+                           f"EMA gap={ema_gap:.2f}% | STM={stm_angle:.1f}° | ADX={indicators.adx:.1f}")
                 
                 return SignalData(
                     asset=asset,
                     direction="sell",
                     timeframe=timeframe,
-                    urgency=None,  # No urgency in Super mode
+                    urgency=None,
                     confidence=min(98, 75 + (distance_pct * 0.4)),
                     reasons=reasons,
                     mode="super",
