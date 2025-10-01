@@ -15,11 +15,11 @@ class SignalData(BaseModel):
     """Trading signal data model"""
     asset: str
     direction: Literal["buy", "sell"]
-    priority: Literal["hot", "sharp", "nice"]
+    urgency: Literal["hot", "sharp", "nice"]    confidence: float
+
     mode: Literal["flash", "super"]
     timeframe: str
     timestamp: datetime
-    confidence: float
     indicators: dict
     signal_id: str
 
