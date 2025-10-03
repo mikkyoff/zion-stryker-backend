@@ -315,44 +315,70 @@ class ScannerManager:
             return
 
         try:
-            # 🔥 FIX: Use self.current_timeframe instead of hardcoded 60!
+            # Convert timeframe to integer
             timeframe_int = int(self.current_timeframe)
             
-            # Get candles from API with CORRECT timeframe
+            # Request MORE candles for reliability
+            candle_count = 100
+            
+            logger.debug(f"📡 Requesting {candle_count} candles for {asset} at {timeframe_int}s")
+            
+            # Get candles from API
             candles_data = await self.api_client.get_candles(
-                asset=asset,
-                timeframe=timeframe_int,  # ✅ Use selected timeframe
-                count=50
+                asset,
+                timeframe_int,
+                candle_count
             )
 
-            if not candles_data or len(candles_data) < 50:
-                logger.debug(f"⏭️ Insufficient candles for {asset} ({len(candles_data) if candles_data else 0}/50)")
+            # Log what we actually got
+            if candles_data:
+                logger.debug(f"✅ Received {len(candles_data)} candles for {asset}")
+            else:
+                logger.debug(f"❌ No candles received for {asset}")
                 return
 
+            # Need at least 50 candles for indicator calculation
+            if len(candles_data) < 50:
+                logger.warning(f"⏭️ Insufficient candles for {asset}: got {len(candles_data)}/50 at {timeframe_int}s timeframe")
+                return
+
+            # Take only the last 50 candles for analysis
+            candles_data = candles_data[-50:]
+
             # Convert to CandleData objects
-            candles = [
-                CandleData(
-                    timestamp=c.get('timestamp', c.get('time', 0)),
-                    open=float(c.get('open', 0)),
-                    high=float(c.get('high', 0)),
-                    low=float(c.get('low', 0)),
-                    close=float(c.get('close', 0)),
-                    volume=float(c.get('volume', 0))
-                ) for c in candles_data
-            ]
+            candles = []
+            for c in candles_data:
+                try:
+                    candles.append(CandleData(
+                        timestamp=c.get('timestamp', c.get('time', c.get('from', 0))),
+                        open=float(c.get('open', 0)),
+                        high=float(c.get('high', 0)),
+                        low=float(c.get('low', 0)),
+                        close=float(c.get('close', 0)),
+                        volume=float(c.get('volume', 0))
+                    ))
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Error parsing candle data for {asset}: {e}")
+                    continue
+
+            if len(candles) < 50:
+                logger.warning(f"⏭️ Insufficient valid candles after parsing for {asset}: {len(candles)}/50")
+                return
+
+            logger.debug(f"🔍 Analyzing {asset} with {len(candles)} candles at {timeframe_int}s")
 
             # Analyze based on current mode
             signal = None
             if self.current_mode == "flash":
                 signal = self.signal_engine.analyze_flash_mode(
                     candles=candles,
-                    timeframe=self.current_timeframe,  # ✅ Pass correct timeframe
+                    timeframe=self.current_timeframe,
                     asset=asset
                 )
             elif self.current_mode == "super":
                 signal = self.signal_engine.analyze_super_mode(
                     candles=candles,
-                    timeframe=self.current_timeframe,  # ✅ Pass correct timeframe
+                    timeframe=self.current_timeframe,
                     asset=asset
                 )
 
@@ -385,7 +411,7 @@ class ScannerManager:
                     await self.signal_callback(signal)
 
         except Exception as e:
-            logger.error(f"Error scanning {asset}: {e}")
+            logger.error(f"❌ Error scanning {asset} at {self.current_timeframe}s: {e}", exc_info=True)
 
     def get_live_signals(self) -> List[dict]:
         """Get current live signals as dictionaries"""
