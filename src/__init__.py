@@ -1,1 +1,1 @@
-# Zion Stryker Backend Package
+"""Zion Stryker Trading Bot"""
