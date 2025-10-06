@@ -1,50 +1,83 @@
 """
 Data models for Zion Stryker Trading Bot
 """
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import Optional, List, Literal
 from datetime import datetime
+from enum import Enum
 
 class CandleData(BaseModel):
-    """Single candle/bar data"""
+    """Individual candle data point"""
     open: float
     high: float
     low: float
     close: float
-    volume: float
+    volume: float = 0.0
     timestamp: datetime
-
-class SignalData(BaseModel):
-    """Trading signal data"""
-    asset: str
-    direction: str  # "buy" or "sell"
-    timeframe: str
-    urgency: Optional[str] = None  # "nice", "sharp", "hot" (Flash only) or None (Super)
-    confidence: float
-    reasons: List[str]
-    mode: str  # "flash" or "super"
-    timestamp: datetime
-    expiry: Optional[int] = None
 
 class TechnicalIndicators(BaseModel):
-    """Technical analysis indicators"""
+    """Technical indicators calculated from candle data"""
     rsi: Optional[float] = None
+    ema_6: Optional[float] = None
+    ema_18: Optional[float] = None
+    sma_7: Optional[float] = None
     bb_upper: Optional[float] = None
     bb_middle: Optional[float] = None
     bb_lower: Optional[float] = None
     bb_width: Optional[float] = None
-    ema_6: Optional[float] = None
-    ema_18: Optional[float] = None
-    ema_proximity: Optional[float] = None
-    adx: Optional[float] = None  # Added for future use
+    adx: Optional[float] = None
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    atr: Optional[float] = None
+    stm_angle: Optional[float] = None
+
+class SignalData(BaseModel):
+    """Trading signal information"""
+    asset: str
+    direction: Literal["call", "put"]
+    mode: Literal["flash", "super"]
+    timeframe: str
+    confidence: float
+    priority: Literal["high", "medium", "low"]
+    timestamp: datetime
+    indicators: Optional[TechnicalIndicators] = None
+    reason: Optional[str] = None
+
+class TradeResult(BaseModel):
+    """Trade execution result"""
+    trade_id: str
+    asset: str
+    direction: Literal["call", "put"]
+    mode: Literal["flash", "super"]
+    timeframe: str
+    amount: float
+    entry_time: datetime
+    expiry_time: datetime
+    entry_price: float
+    exit_price: Optional[float] = None
+    result: Optional[Literal["win", "loss", "pending"]] = "pending"
+    profit: Optional[float] = None
+    close_time: Optional[datetime] = None
+
+class ScannerToggleRequest(BaseModel):
+    """Scanner toggle request"""
+    enabled: bool
+    mode: Literal["flash", "super"] = "flash"
+    timeframe: str = "30"
 
 class SignalResponse(BaseModel):
     """API response for signals"""
     signals: List[SignalData]
-    timestamp: str
+    count: int
+    timestamp: datetime
 
-class ScannerToggleRequest(BaseModel):
-    """Scanner toggle request"""
-    action: str  # "start" or "stop"
-    mode: Optional[str] = "flash"
-    timeframe: Optional[str] = "60"
+class TradeResultsResponse(BaseModel):
+    """API response for trade results"""
+    trades: List[TradeResult]
+    total_trades: int
+    wins: int
+    losses: int
+    pending: int
+    win_rate: float
+    total_profit: float
